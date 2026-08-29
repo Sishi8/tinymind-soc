@@ -24,12 +24,6 @@ CLASS_CREATIVE = 2
 # ============================================================================
 # SOFTWARE REFERENCE MODEL
 # ============================================================================
-#
-# This is the Python version of TinyMind.
-#
-# The hardware result must match this model.
-#
-# ============================================================================
 
 def tinymind_reference(features):
 
@@ -37,10 +31,6 @@ def tinymind_reference(features):
         (features >> i) & 1
         for i in range(8)
     ]
-
-    # ------------------------------------------------------------------------
-    # Three TinyMind neuron scores
-    # ------------------------------------------------------------------------
 
     score_ai = (
         x[0]
@@ -68,58 +58,38 @@ def tinymind_reference(features):
         + 1
     )
 
-
-    # ------------------------------------------------------------------------
-    # Winner selection
-    #
     # Tie priority:
-    #
     # AI > Hardware > Creative
-    # ------------------------------------------------------------------------
 
     if (
         score_ai >= score_hardware
-        and
-        score_ai >= score_creative
+        and score_ai >= score_creative
     ):
 
         winner = CLASS_AI
-
         winning_score = score_ai
-
         second_score = max(
             score_hardware,
             score_creative
         )
 
-
     elif score_hardware >= score_creative:
 
         winner = CLASS_HARDWARE
-
         winning_score = score_hardware
-
         second_score = max(
             score_ai,
             score_creative
         )
 
-
     else:
 
         winner = CLASS_CREATIVE
-
         winning_score = score_creative
-
         second_score = max(
             score_ai,
             score_hardware
         )
-
-
-    # ------------------------------------------------------------------------
-    # Confidence
-    # ------------------------------------------------------------------------
 
     margin = winning_score - second_score
 
@@ -128,15 +98,9 @@ def tinymind_reference(features):
         9
     )
 
-
-    # ------------------------------------------------------------------------
-    # Close prediction
-    # ------------------------------------------------------------------------
-
     close_prediction = (
         margin <= 1
     )
-
 
     return (
         winner,
@@ -146,25 +110,21 @@ def tinymind_reference(features):
 
 
 # ============================================================================
-# EXPECTED SEVEN SEGMENT VALUE
+# SEVEN-SEGMENT REFERENCE
 # ============================================================================
 
 def expected_segments(class_value):
 
     if class_value == CLASS_AI:
-
         return SEG_A
 
     elif class_value == CLASS_HARDWARE:
-
         return SEG_H
 
     elif class_value == CLASS_CREATIVE:
-
         return SEG_C
 
     else:
-
         return 0
 
 
@@ -174,132 +134,91 @@ def expected_segments(class_value):
 
 async def reset_dut(dut):
 
-    # ------------------------------------------------------------------------
-    # Initial inputs
-    # ------------------------------------------------------------------------
-
     dut.ena.value = 1
-
     dut.ui_in.value = 0
-
     dut.uio_in.value = 0
-
-
-    # ------------------------------------------------------------------------
-    # Assert active-low reset
-    # ------------------------------------------------------------------------
 
     dut.rst_n.value = 0
 
-
     for _ in range(3):
-
         await RisingEdge(dut.clk)
-
-
-    # ------------------------------------------------------------------------
-    # Release reset
-    # ------------------------------------------------------------------------
 
     dut.rst_n.value = 1
 
-
     await RisingEdge(dut.clk)
-
     await FallingEdge(dut.clk)
+    await Timer(20, unit="ns")
 
 
 # ============================================================================
-# RUN ONE INFERENCE
+# RUN ONE SOC INFERENCE
 # ============================================================================
 
 async def run_inference(
     dut,
     features,
-    max_cycles=30
+    max_cycles=20
 ):
 
     # ------------------------------------------------------------------------
-    # Stop CPU first.
-    #
-    # uio_in[0] = RUN ENABLE
+    # Make sure CPU RUN is low first.
     # ------------------------------------------------------------------------
 
     dut.uio_in.value = 0
 
-
-    # ------------------------------------------------------------------------
     # Give CPU time to return to WAIT_RUN.
-    # ------------------------------------------------------------------------
-
     for _ in range(3):
-
         await RisingEdge(dut.clk)
 
-
     # ------------------------------------------------------------------------
-    # Put feature vector on TinyTapeout input pins.
+    # Put feature vector on external TinyTapeout inputs.
     # ------------------------------------------------------------------------
 
     dut.ui_in.value = features
 
-
     # ------------------------------------------------------------------------
-    # RUN ENABLE = 1
+    # Enable CPU.
     #
-    # CPU will now execute:
-    #
-    # WAIT_RUN
-    # READ_INPUT
-    # WRITE_FEATURE
-    # START
-    # WAIT_DONE
-    # READ_RESULT
-    # DISPLAY
-    # LOOP
-    #
+    # uio_in[0] = RUN
     # ------------------------------------------------------------------------
 
     dut.uio_in.value = 0b00000001
 
-
     # ------------------------------------------------------------------------
-    # Wait enough CPU cycles for one complete program iteration.
+    # CPU program:
     #
-    # We intentionally do not inspect internal CPU signals here.
+    # PC 0 -> WAIT_RUN
+    # PC 1 -> READ_INPUT
+    # PC 2 -> WRITE_FEATURE
+    # PC 3 -> START
+    # PC 4 -> WAIT_DONE
+    # PC 5 -> READ_RESULT
+    # PC 6 -> DISPLAY
+    # PC 7 -> LOOP
     #
-    # We test the SoC from its external pins.
+    # Allow enough cycles for at least one full pass.
     # ------------------------------------------------------------------------
 
     for _ in range(max_cycles):
-
         await RisingEdge(dut.clk)
 
-
     # ------------------------------------------------------------------------
-    # Stop CPU.
-    #
-    # This prevents it from continuously starting new inferences while
-    # we inspect the output.
+    # Stop CPU before inspecting output.
     # ------------------------------------------------------------------------
 
     dut.uio_in.value = 0
 
+    # Give CPU time to settle back toward WAIT_RUN.
+    for _ in range(3):
+        await RisingEdge(dut.clk)
 
     # ------------------------------------------------------------------------
-    # Allow output logic to settle.
-    #
-    # FallingEdge + Timer is useful for both RTL and gate-level simulation.
+    # Sample away from the active clock edge.
+    # This is especially useful for gate-level simulation.
     # ------------------------------------------------------------------------
 
     await FallingEdge(dut.clk)
-
     await Timer(20, unit="ns")
-
-
-    # ------------------------------------------------------------------------
-    # Read physical TinyTapeout output pins.
-    # ------------------------------------------------------------------------
 
     return int(dut.uo_out.value)
 
@@ -311,13 +230,11 @@ async def run_inference(
 @cocotb.test()
 async def test_tinymind_soc(dut):
 
-    # ========================================================================
-    # START 10 MHz CLOCK
+    # ------------------------------------------------------------------------
+    # 10 MHz clock
     #
-    # 10 MHz:
-    #
-    # period = 100 ns
-    # ========================================================================
+    # 100 ns period
+    # ------------------------------------------------------------------------
 
     clock = Clock(
         dut.clk,
@@ -329,17 +246,15 @@ async def test_tinymind_soc(dut):
         clock.start()
     )
 
-
-    # ========================================================================
-    # RESET SOC
-    # ========================================================================
+    # ------------------------------------------------------------------------
+    # Reset whole SoC
+    # ------------------------------------------------------------------------
 
     await reset_dut(dut)
 
-
-    # ========================================================================
-    # CHECK UNUSED BIDIRECTIONAL OUTPUTS
-    # ========================================================================
+    # ------------------------------------------------------------------------
+    # Bidirectional TinyTapeout outputs are unused.
+    # ------------------------------------------------------------------------
 
     assert int(dut.uio_out.value) == 0, (
         "uio_out should remain zero"
@@ -349,17 +264,11 @@ async def test_tinymind_soc(dut):
         "uio_oe should remain zero"
     )
 
-
     # ========================================================================
-    # TEST ALL 256 POSSIBLE FEATURE VECTORS
+    # TEST ALL 256 FEATURE COMBINATIONS
     # ========================================================================
 
     for features in range(256):
-
-
-        # --------------------------------------------------------------------
-        # Calculate expected answer in Python
-        # --------------------------------------------------------------------
 
         (
             expected_class,
@@ -368,9 +277,8 @@ async def test_tinymind_soc(dut):
 
         ) = tinymind_reference(features)
 
-
         # --------------------------------------------------------------------
-        # Let the SoC itself process the input.
+        # Let the SoC process the feature vector.
         # --------------------------------------------------------------------
 
         actual_output = await run_inference(
@@ -378,20 +286,18 @@ async def test_tinymind_soc(dut):
             features
         )
 
-
         # --------------------------------------------------------------------
-        # Expected seven-segment output
-        #// --------------------------------------------------------------------
+        # Determine expected seven-segment output.
+        # --------------------------------------------------------------------
 
         expected_seg = expected_segments(
             expected_class
         )
 
-
         # --------------------------------------------------------------------
-        # uo_out[7] = decimal point / close prediction
+        # uo_out[7]   = close prediction / decimal point
         #
-        # uo_out[6:0] = seven segment
+        # uo_out[6:0] = A / H / C segments
         # --------------------------------------------------------------------
 
         expected_output = (
@@ -400,42 +306,29 @@ async def test_tinymind_soc(dut):
             expected_seg
         )
 
-
         # --------------------------------------------------------------------
-        # Compare
+        # Compare physical output pins.
         # --------------------------------------------------------------------
 
         assert actual_output == expected_output, (
 
             f"\nTinyMind SoC mismatch\n"
-
-            f"features          = {features:08b}\n"
-
-            f"expected class    = {expected_class}\n"
-
+            f"features            = {features:08b}\n"
+            f"expected class      = {expected_class}\n"
             f"expected confidence = {expected_confidence}\n"
-
-            f"expected close    = {expected_close}\n"
-
-            f"expected output   = {expected_output:08b}\n"
-
-            f"actual output     = {actual_output:08b}\n"
+            f"expected close      = {expected_close}\n"
+            f"expected output     = {expected_output:08b}\n"
+            f"actual output       = {actual_output:08b}\n"
 
         )
 
-
         # --------------------------------------------------------------------
-        # Check unused bidirectional outputs again
+        # These should always remain zero.
         # --------------------------------------------------------------------
 
         assert int(dut.uio_out.value) == 0
 
         assert int(dut.uio_oe.value) == 0
-
-
-    # ========================================================================
-    # SUCCESS
-    # ========================================================================
 
     dut._log.info(
         "TinyMind SoC passed all 256 feature combinations!"
