@@ -117,4 +117,4 @@ async def test_clocked_tinymind(dut):
         assert int(dut.uio_out.value) == 0
         assert int(dut.uio_oe.value) == 0
 
-    dut._log.info("All 256 clocked TinyMind cases passed")xpected output values.
+    dut._log.info("All 256 clocked TinyMind cases passed")
