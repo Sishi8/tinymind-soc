@@ -5,7 +5,7 @@ project:
   discord:      ""
   description:  "A clocked 8-input, 3-class fixed-weight neural-network inference accelerator for TinyTapeout."
   language:     "Verilog"
-  clock_hz:     0
+  clock_hz:     10000000
 
   # How many tiles your design occupies? A single tile is about 167x108 uM.
   tiles: "1x1"
