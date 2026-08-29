@@ -2,45 +2,97 @@
  * Copyright (c) 2026 Sishi
  * SPDX-License-Identifier: Apache-2.0
  *
- * TinyMind Memory-Mapped Accelerator
+ * TinyMind Clocked Memory-Mapped Accelerator
  *
- * TinyMind implemented as a small SoC-style peripheral.
+ * Final architecture:
  *
- * Bus interface:
+ *              10 MHz CLOCK
+ *                    |
+ *                    v
+ *             FEATURE REGISTER
+ *                    |
+ *                    v
+ *              TinyMind Logic
+ *                    |
+ *                    v
+ *             RESULT REGISTERS
+ *              /     |      \
+ *          class  confidence  close
+ *              \     |      /
+ *                    v
+ *              OUTPUT SELECT
+ *              /           \
+ *       BUS/DEBUG MODE   DISPLAY MODE
+ *            |                |
+ *        read_data          A/H/C
+ *            |                |
+ *            +------ uo_out ---+
  *
- *   ui_in[7:0]  = write data
  *
- *   uio_in[1:0] = register address
- *   uio_in[2]   = write enable
+ * TinyTapeout interface
+ * ---------------------
  *
- *   uo_out[7:0] = read data
+ * ui_in[7:0]
+ *      write data
  *
- * Address map:
+ * uio_in[1:0]
+ *      register address
  *
- *   00 = FEATURE register
- *   01 = CONTROL register
- *   10 = STATUS register
- *   11 = RESULT register
+ * uio_in[2]
+ *      write enable
  *
- * CONTROL:
+ * uio_in[3]
+ *      output mode
  *
- *   bit 0 = START
+ *      0 = register/bus read mode
+ *      1 = seven-segment display mode
  *
- * STATUS:
  *
- *   bit 0 = DONE
- *   bit 1 = BUSY
+ * Register map
+ * ------------
  *
- * RESULT:
+ * 00 = FEATURE
+ * 01 = CONTROL
+ * 10 = STATUS
+ * 11 = RESULT
  *
- *   bits [1:0] = predicted class
- *                00 = AI
- *                01 = Hardware
- *                10 = Creative
  *
- *   bits [5:2] = confidence margin (0-9)
+ * CONTROL
+ * -------
  *
- *   bit 6 = close prediction
+ * bit 0 = START
+ *
+ *
+ * STATUS
+ * ------
+ *
+ * bit 0 = DONE
+ * bit 1 = BUSY
+ *
+ *
+ * RESULT
+ * ------
+ *
+ * bits [1:0] = class
+ *
+ *      00 = AI
+ *      01 = Hardware
+ *      10 = Creative
+ *
+ * bits [5:2] = confidence margin
+ *
+ * bit 6 = close prediction
+ *
+ *
+ * DISPLAY MODE
+ * ------------
+ *
+ * uio_in[3] = 1
+ *
+ * uo_out[6:0] = seven-segment A/H/C
+ * uo_out[7]   = decimal point
+ *
+ * decimal point = 1 when prediction is close
  *
  */
 
@@ -83,38 +135,54 @@ module tt_um_sishi888_tinymind (
 
 
     // ============================================================
-    // SIMPLE BUS SIGNALS
+    // SEVEN-SEGMENT ENCODING
     // ============================================================
     //
-    // ui_in[7:0]
-    //     Data that is being written.
+    // uo_out[6:0]
     //
-    // uio_in[1:0]
-    //     Address of the register.
+    // Same segment encoding as the original TinyMind project.
     //
-    // uio_in[2]
-    //     Write enable.
-    //
+
+    localparam [6:0] SEG_A = 7'b1110111;
+    localparam [6:0] SEG_H = 7'b0110111;
+    localparam [6:0] SEG_C = 7'b1001110;
+
+
+    // ============================================================
+    // BUS SIGNALS
+    // ============================================================
 
     wire [1:0] address;
     wire       write_enable;
+    wire       display_mode;
+
 
     assign address      = uio_in[1:0];
     assign write_enable = uio_in[2];
+
+    // ------------------------------------------------------------
+    // 0 = bus / debug mode
+    // 1 = seven-segment display mode
+    // ------------------------------------------------------------
+
+    assign display_mode = uio_in[3];
 
 
     // ============================================================
     // FEATURE REGISTER
     // ============================================================
     //
-    // This register stores the eight TinyMind input features.
+    // Stores all 8 TinyMind input features.
+    //
+    // This is real sequential storage.
+    // Data changes only on a rising clock edge.
     //
 
     reg [7:0] feature_reg;
 
 
     // ============================================================
-    // STATUS REGISTERS
+    // CONTROL / STATUS REGISTERS
     // ============================================================
 
     reg busy;
@@ -126,8 +194,10 @@ module tt_um_sishi888_tinymind (
     // ============================================================
 
     reg [1:0] result_class;
+
     reg [3:0] result_confidence;
-    reg       result_close;
+
+    reg result_close;
 
 
     // ============================================================
@@ -155,20 +225,30 @@ module tt_um_sishi888_tinymind (
 
 
     // ============================================================
-    // TINYMIND FIXED-WEIGHT NEURONS
+    // TINYMIND NEURONS
     // ============================================================
     //
-    // These are the same equations used by TinyMind.
+    // Fixed-weight TinyMind equations.
     //
+    // This section is COMBINATIONAL LOGIC.
+    //
+    // It operates between clock edges.
+    // ============================================================
+
 
     wire signed [5:0] score_ai;
+
     wire signed [5:0] score_hardware;
+
     wire signed [5:0] score_creative;
 
 
-    // AI-oriented neuron
+    // ------------------------------------------------------------
+    // AI-oriented score
+    // ------------------------------------------------------------
 
     assign score_ai =
+
         x0 +
         x1 +
         x4 -
@@ -177,9 +257,12 @@ module tt_um_sishi888_tinymind (
         6'sd1;
 
 
-    // Hardware-oriented neuron
+    // ------------------------------------------------------------
+    // Hardware-oriented score
+    // ------------------------------------------------------------
 
     assign score_hardware =
+
         x0 +
         x2 +
         x3 +
@@ -187,9 +270,12 @@ module tt_um_sishi888_tinymind (
         x6;
 
 
-    // Creative-oriented neuron
+    // ------------------------------------------------------------
+    // Creative-oriented score
+    // ------------------------------------------------------------
 
     assign score_creative =
+
         -x1 -
         x2 +
         x5 +
@@ -205,47 +291,82 @@ module tt_um_sishi888_tinymind (
     reg [1:0] winner_next;
 
     reg signed [5:0] winning_score_next;
+
     reg signed [5:0] second_score_next;
 
 
     always @(*) begin
 
-        if ((score_ai >= score_hardware) &&
-            (score_ai >= score_creative)) begin
+
+        // --------------------------------------------------------
+        // AI wins
+        //
+        // AI receives highest tie priority.
+        // --------------------------------------------------------
+
+        if (
+            (score_ai >= score_hardware) &&
+            (score_ai >= score_creative)
+        ) begin
+
 
             winner_next = CLASS_AI;
 
             winning_score_next = score_ai;
 
+
             if (score_hardware >= score_creative)
+
                 second_score_next = score_hardware;
+
             else
+
                 second_score_next = score_creative;
 
         end
 
+
+        // --------------------------------------------------------
+        // Hardware wins
+        // --------------------------------------------------------
+
         else if (score_hardware >= score_creative) begin
+
 
             winner_next = CLASS_HARDWARE;
 
             winning_score_next = score_hardware;
 
+
             if (score_ai >= score_creative)
+
                 second_score_next = score_ai;
+
             else
+
                 second_score_next = score_creative;
 
         end
 
+
+        // --------------------------------------------------------
+        // Creative wins
+        // --------------------------------------------------------
+
         else begin
+
 
             winner_next = CLASS_CREATIVE;
 
             winning_score_next = score_creative;
 
+
             if (score_ai >= score_hardware)
+
                 second_score_next = score_ai;
+
             else
+
                 second_score_next = score_hardware;
 
         end
@@ -254,134 +375,200 @@ module tt_um_sishi888_tinymind (
 
 
     // ============================================================
-    // CONFIDENCE CALCULATION
+    // CONFIDENCE
+    // ============================================================
+    //
+    // confidence =
+    //
+    //     winning score
+    //          -
+    //     second-best score
+    //
     // ============================================================
 
     wire signed [5:0] margin_next;
 
+
     assign margin_next =
-        winning_score_next - second_score_next;
+
+        winning_score_next -
+        second_score_next;
 
 
     // ============================================================
-    // CONTROL / REGISTER LOGIC
+    // CLOCKED CONTROL LOGIC
     // ============================================================
     //
-    // Normal sequence:
     //
-    // CLOCK:
+    // FEATURE WRITE
     //
-    //   Write address 00
-    //        |
-    //        v
-    //   feature_reg gets input
+    //        rising edge
+    //             |
+    //             v
+    //       feature_reg
     //
-    //   Write address 01 with bit 0 = 1
-    //        |
-    //        v
-    //   busy = 1
     //
-    //   next clock
-    //        |
-    //        v
-    //   TinyMind result captured
+    // START WRITE
     //
-    //   busy = 0
-    //   done = 1
+    //        rising edge
+    //             |
+    //             v
+    //          busy = 1
     //
+    //
+    // TinyMind combinational logic operates
+    //
+    //
+    //        next rising edge
+    //             |
+    //             v
+    //       RESULT REGISTERS
+    //
+    //       busy = 0
+    //       done = 1
+    //
+    // ============================================================
+
 
     always @(posedge clk or negedge rst_n) begin
 
+
+        // ========================================================
+        // RESET
+        // ========================================================
+
         if (!rst_n) begin
 
-            feature_reg       <= 8'b0000_0000;
 
-            busy              <= 1'b0;
-            done              <= 1'b0;
+            feature_reg <= 8'b0000_0000;
 
-            result_class      <= CLASS_AI;
+
+            busy <= 1'b0;
+
+            done <= 1'b0;
+
+
+            result_class <= CLASS_AI;
+
             result_confidence <= 4'd0;
-            result_close      <= 1'b0;
+
+            result_close <= 1'b0;
+
 
         end
 
+
         else begin
 
-            // ----------------------------------------------------
-            // TinyMind is currently running
-            // ----------------------------------------------------
+
+            // ====================================================
+            // INFERENCE IS RUNNING
+            // ====================================================
 
             if (busy) begin
 
-                // Capture winner
+
+                // -----------------------------------------------
+                // Capture predicted class
+                // -----------------------------------------------
 
                 result_class <= winner_next;
 
 
-                // Capture confidence margin
+                // -----------------------------------------------
+                // Capture confidence
+                //
+                // Clamp at 9.
+                // -----------------------------------------------
 
                 if (margin_next > 6'sd9)
+
                     result_confidence <= 4'd9;
+
                 else
+
                     result_confidence <= margin_next[3:0];
 
 
-                // Close prediction flag
+                // -----------------------------------------------
+                // Close prediction
+                //
+                // Margin 0 or 1 means two classes were close.
+                // -----------------------------------------------
 
-                result_close <= (margin_next <= 6'sd1);
+                result_close <=
+
+                    (margin_next <= 6'sd1);
 
 
+                // -----------------------------------------------
                 // Inference finished
+                // -----------------------------------------------
 
                 busy <= 1'b0;
+
                 done <= 1'b1;
+
 
             end
 
 
-            // ----------------------------------------------------
-            // Bus write
-            // ----------------------------------------------------
+            // ====================================================
+            // REGISTER WRITE
+            // ====================================================
 
             else if (write_enable) begin
+
 
                 case (address)
 
 
-                    // --------------------------------------------
+                    // ============================================
                     // FEATURE REGISTER
-                    // --------------------------------------------
+                    // ============================================
 
                     ADDR_FEATURE: begin
 
+
                         feature_reg <= ui_in;
+
 
                     end
 
 
-                    // --------------------------------------------
+                    // ============================================
                     // CONTROL REGISTER
-                    // --------------------------------------------
+                    // ============================================
 
                     ADDR_CONTROL: begin
 
-                        // START bit
+
+                        // START command
 
                         if (ui_in[0]) begin
 
+
                             busy <= 1'b1;
+
                             done <= 1'b0;
+
 
                         end
 
+
                     end
 
+
+                    // ============================================
+                    // STATUS / RESULT
+                    //
+                    // Read only.
+                    // ============================================
 
                     default: begin
 
-                        // STATUS and RESULT are read-only.
-
                     end
+
 
                 endcase
 
@@ -393,85 +580,104 @@ module tt_um_sishi888_tinymind (
 
 
     // ============================================================
-    // READ MULTIPLEXER
+    // BUS READ MULTIPLEXER
     // ============================================================
-    //
-    // Whatever register address is selected appears on uo_out.
-    //
 
     reg [7:0] read_data;
 
 
     always @(*) begin
 
+
         case (address)
 
 
             // ----------------------------------------------------
-            // FEATURE
+            // FEATURE REGISTER
             // ----------------------------------------------------
 
             ADDR_FEATURE: begin
 
+
                 read_data = feature_reg;
+
 
             end
 
 
             // ----------------------------------------------------
-            // CONTROL
+            // CONTROL REGISTER
             // ----------------------------------------------------
 
             ADDR_CONTROL: begin
 
+
                 read_data = 8'b0000_0000;
+
 
             end
 
 
             // ----------------------------------------------------
-            // STATUS
+            // STATUS REGISTER
             //
-            // bit 0 = done
-            // bit 1 = busy
+            // bit 0 = DONE
+            // bit 1 = BUSY
             // ----------------------------------------------------
 
             ADDR_STATUS: begin
 
+
                 read_data = {
+
                     6'b000000,
+
                     busy,
+
                     done
+
                 };
+
 
             end
 
 
             // ----------------------------------------------------
-            // RESULT
+            // RESULT REGISTER
             //
-            // [1:0] = class
-            // [5:2] = confidence
-            // [6]   = close prediction
+            // bit 7       unused
+            // bit 6       close prediction
+            // bits [5:2]  confidence
+            // bits [1:0]  class
             // ----------------------------------------------------
 
             ADDR_RESULT: begin
 
+
                 read_data = {
+
                     1'b0,
+
                     result_close,
+
                     result_confidence,
+
                     result_class
+
                 };
+
 
             end
 
 
             default: begin
 
+
                 read_data = 8'b0000_0000;
 
+
             end
+
 
         endcase
 
@@ -479,34 +685,130 @@ module tt_um_sishi888_tinymind (
 
 
     // ============================================================
-    // TinyTapeout OUTPUT
+    // SEVEN-SEGMENT DECODER
     // ============================================================
 
-    assign uo_out = read_data;
+    reg [6:0] class_segments;
+
+
+    always @(*) begin
+
+
+        case (result_class)
+
+
+            CLASS_AI: begin
+
+                class_segments = SEG_A;
+
+            end
+
+
+            CLASS_HARDWARE: begin
+
+                class_segments = SEG_H;
+
+            end
+
+
+            CLASS_CREATIVE: begin
+
+                class_segments = SEG_C;
+
+            end
+
+
+            default: begin
+
+                class_segments = 7'b0000000;
+
+            end
+
+
+        endcase
+
+    end
 
 
     // ============================================================
-    // BIDIRECTIONAL OUTPUTS UNUSED
+    // DISPLAY OUTPUT
     // ============================================================
     //
-    // uio pins are being used only as INPUTS.
+    // uo_out[6:0] = A/H/C
     //
+    // uo_out[7] = decimal point
+    //
+    // Decimal point lights for a close prediction.
+    // ============================================================
 
-    assign uio_out = 8'b0000_0000;
-    assign uio_oe  = 8'b0000_0000;
+    wire [7:0] display_data;
+
+
+    assign display_data = {
+
+        result_close,
+
+        class_segments
+
+    };
 
 
     // ============================================================
-    // UNUSED INPUTS
+    // FINAL OUTPUT SELECT
+    // ============================================================
+    //
+    // uio_in[3] = 0
+    //
+    //      BUS MODE
+    //
+    //      uo_out = selected register
+    //
+    //
+    // uio_in[3] = 1
+    //
+    //      DISPLAY MODE
+    //
+    //      uo_out = A / H / C
+    //
+    // ============================================================
+
+    assign uo_out =
+
+        display_mode
+            ?
+        display_data
+            :
+        read_data;
+
+
+    // ============================================================
+    // BIDIRECTIONAL PINS
+    // ============================================================
+    //
+    // We use uio pins as INPUTS only.
+    // ============================================================
+
+    assign uio_out = 8'b00000000;
+
+    assign uio_oe = 8'b00000000;
+
+
+    // ============================================================
+    // UNUSED SIGNALS
     // ============================================================
 
     wire _unused = &{
+
         ena,
-        uio_in[7:3],
+
+        uio_in[7:4],
+
         1'b0
+
     };
 
 
 endmodule
+
 
 `default_nettype wire
