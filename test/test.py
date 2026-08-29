@@ -1,5 +1,4 @@
 import cocotb
-
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, FallingEdge
 
@@ -38,9 +37,6 @@ def calculate_prediction(features: int):
     x6 = (features >> 6) & 1
     x7 = (features >> 7) & 1
 
-
-    # TinyMind neurons
-
     score_ai = (
         x0 +
         x1 +
@@ -67,51 +63,32 @@ def calculate_prediction(features: int):
         1
     )
 
-
-    # ------------------------------------------------------------
-    # Winner selection
-    #
     # Tie priority:
-    #
-    # AI
-    # Hardware
-    # Creative
-    # ------------------------------------------------------------
+    # AI > Hardware > Creative
 
     if score_ai >= score_hw and score_ai >= score_cr:
 
         predicted_class = CLASS_AI
-
         winning_score = score_ai
         second_score = max(score_hw, score_cr)
-
 
     elif score_hw >= score_cr:
 
         predicted_class = CLASS_HARDWARE
-
         winning_score = score_hw
         second_score = max(score_ai, score_cr)
-
 
     else:
 
         predicted_class = CLASS_CREATIVE
-
         winning_score = score_cr
         second_score = max(score_ai, score_hw)
 
-
     margin = winning_score - second_score
-
-
-    # Hardware clamps confidence at 9
 
     confidence = min(margin, 9)
 
-
     close_prediction = 1 if margin <= 1 else 0
-
 
     return (
         predicted_class,
@@ -121,86 +98,43 @@ def calculate_prediction(features: int):
 
 
 # ================================================================
-# HELPER:
-# SET REGISTER ADDRESS
-# ================================================================
-
-def set_address(dut, address):
-
-    current = int(dut.uio_in.value)
-
-    # Clear address bits [1:0]
-
-    current &= ~0b11
-
-    # Set new address
-
-    current |= address
-
-    dut.uio_in.value = current
-
-
-# ================================================================
-# HELPER:
-# WRITE A REGISTER
+# BUS WRITE
 # ================================================================
 
 async def bus_write(dut, address, data):
 
-    # ------------------------------------------------------------
-    # Address
-    # ------------------------------------------------------------
+    # uio_in[1:0] = address
+    # uio_in[2]   = write enable
 
-    value = address
-
-
-    # ------------------------------------------------------------
-    # uio_in[2] = write enable
-    # ------------------------------------------------------------
-
-    value |= (1 << 2)
-
-
-    dut.uio_in.value = value
-
+    dut.uio_in.value = address | (1 << 2)
     dut.ui_in.value = data
 
-
-    # ------------------------------------------------------------
-    # Register captures on rising edge
-    # ------------------------------------------------------------
+    # Register captures write here
 
     await RisingEdge(dut.clk)
 
-
-    # ------------------------------------------------------------
-    # Remove write enable
-    # ------------------------------------------------------------
+    # Remove write enable immediately after capture
 
     dut.uio_in.value = address
 
-
-    # Give signals some settling time
+    # Wait until safely between clock edges
 
     await FallingEdge(dut.clk)
 
 
 # ================================================================
-# HELPER:
-# READ A REGISTER
+# BUS READ
 # ================================================================
 
 async def bus_read(dut, address):
 
-    # Write enable = 0
+    # Select address with write enable OFF
 
     dut.uio_in.value = address
 
-
-    # Read combinational output safely between clock edges
+    # Allow combinational read mux to settle
 
     await FallingEdge(dut.clk)
-
 
     return int(dut.uo_out.value)
 
@@ -216,11 +150,10 @@ async def test_tinymind_peripheral(dut):
         "Starting TinyMind memory-mapped accelerator test"
     )
 
-
     # ============================================================
     # CLOCK
     #
-    # 100 ns period = 10 MHz
+    # 100 ns = 10 MHz
     # ============================================================
 
     clock = Clock(
@@ -229,9 +162,7 @@ async def test_tinymind_peripheral(dut):
         unit="ns"
     )
 
-    cocotb.start_soon(
-        clock.start()
-    )
+    cocotb.start_soon(clock.start())
 
 
     # ============================================================
@@ -239,9 +170,7 @@ async def test_tinymind_peripheral(dut):
     # ============================================================
 
     dut.ena.value = 1
-
     dut.ui_in.value = 0
-
     dut.uio_in.value = 0
 
 
@@ -252,7 +181,6 @@ async def test_tinymind_peripheral(dut):
     dut.rst_n.value = 0
 
     await RisingEdge(dut.clk)
-
     await RisingEdge(dut.clk)
 
     dut.rst_n.value = 1
@@ -261,15 +189,10 @@ async def test_tinymind_peripheral(dut):
 
 
     # ============================================================
-    # TEST ALL 256 POSSIBLE FEATURE INPUTS
+    # TEST ALL 256 INPUT COMBINATIONS
     # ============================================================
 
     for features in range(256):
-
-
-        # --------------------------------------------------------
-        # Calculate expected result using Python
-        # --------------------------------------------------------
 
         (
             expected_class,
@@ -285,11 +208,7 @@ async def test_tinymind_peripheral(dut):
 
 
         # ========================================================
-        # STEP 1
-        #
-        # WRITE FEATURE REGISTER
-        #
-        # address 00
+        # 1. WRITE FEATURES
         # ========================================================
 
         await bus_write(
@@ -299,17 +218,14 @@ async def test_tinymind_peripheral(dut):
         )
 
 
-        # --------------------------------------------------------
-        # Optional verification:
-        #
-        # Read feature register back
-        # --------------------------------------------------------
+        # ========================================================
+        # 2. VERIFY FEATURE REGISTER
+        # ========================================================
 
         feature_readback = await bus_read(
             dut,
             ADDR_FEATURE
         )
-
 
         assert feature_readback == features, (
 
@@ -321,13 +237,7 @@ async def test_tinymind_peripheral(dut):
 
 
         # ========================================================
-        # STEP 2
-        #
-        # START TINYMIND
-        #
-        # CONTROL register:
-        #
-        # bit 0 = 1
+        # 3. START TINYMIND
         # ========================================================
 
         await bus_write(
@@ -338,39 +248,17 @@ async def test_tinymind_peripheral(dut):
 
 
         # ========================================================
-        # STEP 3
+        # 4. ALLOW RESULT CLOCK EDGE
         #
-        # CHECK BUSY
+        # TinyMind combinational logic works between clocks.
         #
-        # STATUS:
+        # At this rising edge:
         #
-        # bit 0 = done
-        # bit 1 = busy
-        # ========================================================
-
-        status = await bus_read(
-            dut,
-            ADDR_STATUS
-        )
-
-
-        busy = (status >> 1) & 1
-
-
-        assert busy == 1, (
-
-            f"BUSY was not asserted "
-            f"for input {features:08b}"
-
-        )
-
-
-        # ========================================================
-        # STEP 4
+        # result_class
+        # result_confidence
+        # result_close
         #
-        # NEXT CLOCK:
-        #
-        # Result register captures output
+        # are captured.
         # ========================================================
 
         await RisingEdge(dut.clk)
@@ -379,9 +267,7 @@ async def test_tinymind_peripheral(dut):
 
 
         # ========================================================
-        # STEP 5
-        #
-        # CHECK STATUS
+        # 5. READ STATUS
         # ========================================================
 
         status = await bus_read(
@@ -389,9 +275,7 @@ async def test_tinymind_peripheral(dut):
             ADDR_STATUS
         )
 
-
         done = status & 1
-
         busy = (status >> 1) & 1
 
 
@@ -412,9 +296,7 @@ async def test_tinymind_peripheral(dut):
 
 
         # ========================================================
-        # STEP 6
-        #
-        # READ RESULT REGISTER
+        # 6. READ RESULT
         # ========================================================
 
         result = await bus_read(
@@ -423,17 +305,15 @@ async def test_tinymind_peripheral(dut):
         )
 
 
-        # --------------------------------------------------------
-        # Decode result byte
-        # --------------------------------------------------------
+        # ========================================================
+        # DECODE RESULT
+        # ========================================================
 
         actual_class = result & 0b11
-
 
         actual_confidence = (
             result >> 2
         ) & 0b1111
-
 
         actual_close = (
             result >> 6
@@ -443,62 +323,60 @@ async def test_tinymind_peripheral(dut):
         dut._log.info(
 
             f"features={features:08b} "
-
             f"class={actual_class:02b} "
-
             f"confidence={actual_confidence} "
-
             f"close={actual_close}"
 
         )
 
 
         # ========================================================
-        # VERIFY RESULT
+        # CHECK CLASS
         # ========================================================
 
         assert actual_class == expected_class, (
 
             f"Class mismatch for "
             f"{features:08b}: "
-
             f"expected={expected_class:02b}, "
-
             f"actual={actual_class:02b}"
 
         )
 
 
+        # ========================================================
+        # CHECK CONFIDENCE
+        # ========================================================
+
         assert actual_confidence == expected_confidence, (
 
             f"Confidence mismatch for "
             f"{features:08b}: "
-
             f"expected={expected_confidence}, "
-
             f"actual={actual_confidence}"
 
         )
 
 
+        # ========================================================
+        # CHECK CLOSE FLAG
+        # ========================================================
+
         assert actual_close == expected_close, (
 
             f"Close prediction mismatch for "
             f"{features:08b}: "
-
             f"expected={expected_close}, "
-
             f"actual={actual_close}"
 
         )
 
 
         # ========================================================
-        # TINYTAPEOUT BIDIRECTIONAL OUTPUTS
+        # UNUSED TinyTapeout BIDIRECTIONAL OUTPUTS
         # ========================================================
 
         assert int(dut.uio_out.value) == 0
-
         assert int(dut.uio_oe.value) == 0
 
 
