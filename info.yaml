@@ -1,56 +1,48 @@
-# Tiny Tapeout project information
 project:
-  title:        "TinyMind Clocked Version"
+  title:        "TinyMind SoC"
   author:       "Sishi"
   discord:      ""
-  description:  "A clocked 8-input, 3-class fixed-weight neural-network inference accelerator for TinyTapeout."
+  description:  "A tiny processor-controlled 8-input, 3-class fixed-weight inference accelerator with a custom CPU, program ROM, clocked TinyMind core, confidence logic, and seven-segment output."
   language:     "Verilog"
   clock_hz:     10000000
+  tiles:        "1x1"
+  top_module:   "tt_um_sishi888_tinymind"
 
-  # How many tiles your design occupies? A single tile is about 167x108 uM.
-  tiles: "1x1"
-
-  # Top module must match the module name in src/project.v
-  top_module:  "tt_um_sishi888_tinymind"
-
-  # Source files
   source_files:
     - "project.v"
 
 
-# Pinout of the project
 pinout:
 
-  # Inputs - eight binary TinyMind features
-  ui[0]: "Likes mathematics"
-  ui[1]: "Likes programming"
-  ui[2]: "Likes electronics"
-  ui[3]: "Likes physics"
-  ui[4]: "Likes data and patterns"
-  ui[5]: "Likes building things"
-  ui[6]: "Likes design and creativity"
-  ui[7]: "Likes experimentation and research"
+  # Dedicated inputs
+  ui[0]: "Feature 0 - likes mathematics"
+  ui[1]: "Feature 1 - likes programming"
+  ui[2]: "Feature 2 - likes electronics"
+  ui[3]: "Feature 3 - likes physics"
+  ui[4]: "Feature 4 - likes data and patterns"
+  ui[5]: "Feature 5 - likes building things"
+  ui[6]: "Feature 6 - likes design and creativity"
+  ui[7]: "Feature 7 - likes experimentation and research"
 
-  # Seven-segment display outputs
-  uo[0]: "Segment g"
-  uo[1]: "Segment f"
-  uo[2]: "Segment e"
-  uo[3]: "Segment d"
-  uo[4]: "Segment c"
-  uo[5]: "Segment b"
-  uo[6]: "Segment a"
-  uo[7]: "Close prediction decimal point"
+  # Dedicated outputs
+  uo[0]: "Seven-segment g"
+  uo[1]: "Seven-segment f"
+  uo[2]: "Seven-segment e"
+  uo[3]: "Seven-segment d"
+  uo[4]: "Seven-segment c"
+  uo[5]: "Seven-segment b"
+  uo[6]: "Seven-segment a"
+  uo[7]: "Close-prediction decimal point"
 
-  # Bidirectional pins are unused
-  uio[0]: ""
-  uio[1]: ""
-  uio[2]: ""
-  uio[3]: ""
-  uio[4]: ""
-  uio[5]: ""
-  uio[6]: ""
-  uio[7]: ""
+  # Bidirectional pins
+  uio[0]: "CPU run enable"
+  uio[1]: "Unused"
+  uio[2]: "Unused"
+  uio[3]: "Unused"
+  uio[4]: "Unused"
+  uio[5]: "Unused"
+  uio[6]: "Unused"
+  uio[7]: "Unused"
 
 
-# Do not change!
 yaml_version: 6
