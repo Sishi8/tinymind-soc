@@ -1,402 +1,182 @@
 import cocotb
-
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge, FallingEdge,Timer
+from cocotb.triggers import RisingEdge, FallingEdge, Timer
 
 
-# ================================================================
-# REGISTER ADDRESSES
-# ================================================================
-
-ADDR_FEATURE = 0b00
-ADDR_CONTROL = 0b01
-ADDR_STATUS  = 0b10
-ADDR_RESULT  = 0b11
-
-
-# ================================================================
-# CLASS ENCODING
-# ================================================================
-
-CLASS_AI       = 0b00
-CLASS_HARDWARE = 0b01
-CLASS_CREATIVE = 0b10
-
-
-# ================================================================
-# SEVEN-SEGMENT VALUES
-# ================================================================
+# ============================================================================
+# SEVEN SEGMENT VALUES
+# ============================================================================
 
 SEG_A = 0b1110111
-
 SEG_H = 0b0110111
-
 SEG_C = 0b1001110
 
 
-# ================================================================
+# ============================================================================
+# CLASS VALUES
+# ============================================================================
+
+CLASS_AI = 0
+CLASS_HARDWARE = 1
+CLASS_CREATIVE = 2
+
+
+# ============================================================================
 # SOFTWARE REFERENCE MODEL
-# ================================================================
+# ============================================================================
+#
+# This is the Python version of TinyMind.
+#
+# The hardware result must match this model.
+#
+# ============================================================================
 
-def calculate_prediction(features: int):
+def tinymind_reference(features):
 
+    x = [
+        (features >> i) & 1
+        for i in range(8)
+    ]
 
-    x0 = (features >> 0) & 1
-    x1 = (features >> 1) & 1
-    x2 = (features >> 2) & 1
-    x3 = (features >> 3) & 1
-
-    x4 = (features >> 4) & 1
-    x5 = (features >> 5) & 1
-    x6 = (features >> 6) & 1
-    x7 = (features >> 7) & 1
-
-
-    # ============================================================
-    # TinyMind neuron equations
-    # ============================================================
+    # ------------------------------------------------------------------------
+    # Three TinyMind neuron scores
+    # ------------------------------------------------------------------------
 
     score_ai = (
+        x[0]
+        + x[1]
+        + x[4]
+        - x[5]
+        + x[7]
+        + 1
+    )
 
-        x0 +
-        x1 +
-        x4 -
-        x5 +
-        x7 +
-        1
+    score_hardware = (
+        x[0]
+        + x[2]
+        + x[3]
+        + x[5]
+        - x[6]
+    )
 
+    score_creative = (
+        -x[1]
+        - x[2]
+        + x[5]
+        + x[6]
+        + x[7]
+        + 1
     )
 
 
-    score_hw = (
-
-        x0 +
-        x2 +
-        x3 +
-        x5 -
-        x6
-
-    )
-
-
-    score_cr = (
-
-        -x1 -
-        x2 +
-        x5 +
-        x6 +
-        x7 +
-        1
-
-    )
-
-
-    # ============================================================
-    # WINNER
+    # ------------------------------------------------------------------------
+    # Winner selection
     #
     # Tie priority:
     #
-    # AI
-    # Hardware
-    # Creative
-    # ============================================================
+    # AI > Hardware > Creative
+    # ------------------------------------------------------------------------
 
+    if (
+        score_ai >= score_hardware
+        and
+        score_ai >= score_creative
+    ):
 
-    if score_ai >= score_hw and score_ai >= score_cr:
-
-
-        predicted_class = CLASS_AI
+        winner = CLASS_AI
 
         winning_score = score_ai
 
         second_score = max(
-
-            score_hw,
-
-            score_cr
-
+            score_hardware,
+            score_creative
         )
 
 
-    elif score_hw >= score_cr:
+    elif score_hardware >= score_creative:
 
+        winner = CLASS_HARDWARE
 
-        predicted_class = CLASS_HARDWARE
-
-        winning_score = score_hw
+        winning_score = score_hardware
 
         second_score = max(
-
             score_ai,
-
-            score_cr
-
+            score_creative
         )
 
 
     else:
 
+        winner = CLASS_CREATIVE
 
-        predicted_class = CLASS_CREATIVE
-
-        winning_score = score_cr
+        winning_score = score_creative
 
         second_score = max(
-
             score_ai,
-
-            score_hw
-
+            score_hardware
         )
 
 
-    # ============================================================
-    # CONFIDENCE
-    # ============================================================
+    # ------------------------------------------------------------------------
+    # Confidence
+    # ------------------------------------------------------------------------
 
-    margin = (
-
-        winning_score -
-        second_score
-
-    )
-
+    margin = winning_score - second_score
 
     confidence = min(
-
         margin,
-
         9
-
     )
 
 
+    # ------------------------------------------------------------------------
+    # Close prediction
+    # ------------------------------------------------------------------------
+
     close_prediction = (
-
-        1
-        if margin <= 1
-        else
-        0
-
+        margin <= 1
     )
 
 
     return (
-
-        predicted_class,
-
+        winner,
         confidence,
-
         close_prediction
-
     )
 
 
-# ================================================================
-# EXPECTED SEVEN SEGMENT OUTPUT
-# ================================================================
+# ============================================================================
+# EXPECTED SEVEN SEGMENT VALUE
+# ============================================================================
 
-def expected_display(
+def expected_segments(class_value):
 
-    predicted_class,
+    if class_value == CLASS_AI:
 
-    close_prediction
+        return SEG_A
 
-):
+    elif class_value == CLASS_HARDWARE:
 
+        return SEG_H
 
-    if predicted_class == CLASS_AI:
+    elif class_value == CLASS_CREATIVE:
 
-        segments = SEG_A
-
-
-    elif predicted_class == CLASS_HARDWARE:
-
-        segments = SEG_H
-
+        return SEG_C
 
     else:
 
-        segments = SEG_C
+        return 0
 
 
-    return (
+# ============================================================================
+# RESET
+# ============================================================================
 
-        (close_prediction << 7)
+async def reset_dut(dut):
 
-        |
-
-        segments
-
-    )
-
-
-# ================================================================
-# BUS WRITE
-# ================================================================
-
-async def bus_write(
-
-    dut,
-
-    address,
-
-    data
-
-):
-
-
-    # ------------------------------------------------------------
-    # BUS MODE
-    #
-    # uio_in[3] = 0
-    #
-    # WRITE ENABLE
-    #
-    # uio_in[2] = 1
-    # ------------------------------------------------------------
-
-    control = (
-
-        address
-
-        |
-
-        (1 << 2)
-
-    )
-
-
-    dut.uio_in.value = control
-
-    dut.ui_in.value = data
-
-
-    # ------------------------------------------------------------
-    # Register captures write here
-    # ------------------------------------------------------------
-
-    await RisingEdge(dut.clk)
-
-
-    # ------------------------------------------------------------
-    # Disable write
-    # ------------------------------------------------------------
-
-    dut.uio_in.value = address
-
-
-    # ------------------------------------------------------------
-    # Safely move away from rising edge
-    # ------------------------------------------------------------
-
-    await FallingEdge(dut.clk)
-
-
-# ================================================================
-# BUS READ
-# ================================================================
-
-async def bus_read(
-
-    dut,
-
-    address
-
-):
-
-
-    # ------------------------------------------------------------
-    # uio_in[3] = 0
-    #
-    # therefore BUS MODE
-    # ------------------------------------------------------------
-
-    dut.uio_in.value = address
-
-
-    # ------------------------------------------------------------
-    # Sample between clock edges
-    # ------------------------------------------------------------
-
-    await FallingEdge(dut.clk)
-
-
-    return int(
-
-        dut.uo_out.value
-
-    )
-
-
-# ================================================================
-# DISPLAY READ
-# ================================================================
-
-async def display_read(dut):
-
-    # uio_in[3] = 1
-    # Select seven-segment display mode
-
-    dut.uio_in.value = (1 << 3)
-
-    # Move safely away from clock edge
-    await FallingEdge(dut.clk)
-
-    # Give the gate-level output mux / decoder
-    # additional time to propagate
-    await Timer(20, unit="ns")
-
-    return int(dut.uo_out.value)
-
-
-# ================================================================
-# MAIN TEST
-# ================================================================
-
-@cocotb.test()
-
-async def test_tinymind_final(dut):
-
-
-    dut._log.info(
-
-        "Starting final TinyMind clocked peripheral + display test"
-
-    )
-
-
-    # ============================================================
-    # CLOCK
-    #
-    # 100 ns period
-    #
-    # =
-    #
-    # 10 MHz
-    # ============================================================
-
-    clock = Clock(
-
-        dut.clk,
-
-        100,
-
-        unit="ns"
-
-    )
-
-
-    cocotb.start_soon(
-
-        clock.start()
-
-    )
-
-
-    # ============================================================
-    # INITIAL STATE
-    # ============================================================
+    # ------------------------------------------------------------------------
+    # Initial inputs
+    # ------------------------------------------------------------------------
 
     dut.ena.value = 1
 
@@ -405,369 +185,258 @@ async def test_tinymind_final(dut):
     dut.uio_in.value = 0
 
 
-    # ============================================================
-    # RESET
-    # ============================================================
+    # ------------------------------------------------------------------------
+    # Assert active-low reset
+    # ------------------------------------------------------------------------
 
     dut.rst_n.value = 0
 
 
-    await RisingEdge(dut.clk)
+    for _ in range(3):
 
-    await RisingEdge(dut.clk)
+        await RisingEdge(dut.clk)
 
+
+    # ------------------------------------------------------------------------
+    # Release reset
+    # ------------------------------------------------------------------------
 
     dut.rst_n.value = 1
 
 
     await RisingEdge(dut.clk)
 
+    await FallingEdge(dut.clk)
 
-    # ============================================================
-    # TEST ALL 256 INPUT COMBINATIONS
-    # ============================================================
+
+# ============================================================================
+# RUN ONE INFERENCE
+# ============================================================================
+
+async def run_inference(
+    dut,
+    features,
+    max_cycles=30
+):
+
+    # ------------------------------------------------------------------------
+    # Stop CPU first.
+    #
+    # uio_in[0] = RUN ENABLE
+    # ------------------------------------------------------------------------
+
+    dut.uio_in.value = 0
+
+
+    # ------------------------------------------------------------------------
+    # Give CPU time to return to WAIT_RUN.
+    # ------------------------------------------------------------------------
+
+    for _ in range(3):
+
+        await RisingEdge(dut.clk)
+
+
+    # ------------------------------------------------------------------------
+    # Put feature vector on TinyTapeout input pins.
+    # ------------------------------------------------------------------------
+
+    dut.ui_in.value = features
+
+
+    # ------------------------------------------------------------------------
+    # RUN ENABLE = 1
+    #
+    # CPU will now execute:
+    #
+    # WAIT_RUN
+    # READ_INPUT
+    # WRITE_FEATURE
+    # START
+    # WAIT_DONE
+    # READ_RESULT
+    # DISPLAY
+    # LOOP
+    #
+    # ------------------------------------------------------------------------
+
+    dut.uio_in.value = 0b00000001
+
+
+    # ------------------------------------------------------------------------
+    # Wait enough CPU cycles for one complete program iteration.
+    #
+    # We intentionally do not inspect internal CPU signals here.
+    #
+    # We test the SoC from its external pins.
+    # ------------------------------------------------------------------------
+
+    for _ in range(max_cycles):
+
+        await RisingEdge(dut.clk)
+
+
+    # ------------------------------------------------------------------------
+    # Stop CPU.
+    #
+    # This prevents it from continuously starting new inferences while
+    # we inspect the output.
+    # ------------------------------------------------------------------------
+
+    dut.uio_in.value = 0
+
+
+    # ------------------------------------------------------------------------
+    # Allow output logic to settle.
+    #
+    # FallingEdge + Timer is useful for both RTL and gate-level simulation.
+    # ------------------------------------------------------------------------
+
+    await FallingEdge(dut.clk)
+
+    await Timer(20, unit="ns")
+
+
+    # ------------------------------------------------------------------------
+    # Read physical TinyTapeout output pins.
+    # ------------------------------------------------------------------------
+
+    return int(dut.uo_out.value)
+
+
+# ============================================================================
+# MAIN TEST
+# ============================================================================
+
+@cocotb.test()
+async def test_tinymind_soc(dut):
+
+    # ========================================================================
+    # START 10 MHz CLOCK
+    #
+    # 10 MHz:
+    #
+    # period = 100 ns
+    # ========================================================================
+
+    clock = Clock(
+        dut.clk,
+        100,
+        unit="ns"
+    )
+
+    cocotb.start_soon(
+        clock.start()
+    )
+
+
+    # ========================================================================
+    # RESET SOC
+    # ========================================================================
+
+    await reset_dut(dut)
+
+
+    # ========================================================================
+    # CHECK UNUSED BIDIRECTIONAL OUTPUTS
+    # ========================================================================
+
+    assert int(dut.uio_out.value) == 0, (
+        "uio_out should remain zero"
+    )
+
+    assert int(dut.uio_oe.value) == 0, (
+        "uio_oe should remain zero"
+    )
+
+
+    # ========================================================================
+    # TEST ALL 256 POSSIBLE FEATURE VECTORS
+    # ========================================================================
 
     for features in range(256):
 
 
-        # --------------------------------------------------------
-        # Software expected answer
-        # --------------------------------------------------------
+        # --------------------------------------------------------------------
+        # Calculate expected answer in Python
+        # --------------------------------------------------------------------
 
         (
-
             expected_class,
-
             expected_confidence,
-
             expected_close
 
-        ) = calculate_prediction(
+        ) = tinymind_reference(features)
 
+
+        # --------------------------------------------------------------------
+        # Let the SoC itself process the input.
+        # --------------------------------------------------------------------
+
+        actual_output = await run_inference(
+            dut,
             features
-
         )
 
 
-        expected_seg = expected_display(
+        # --------------------------------------------------------------------
+        # Expected seven-segment output
+        #// --------------------------------------------------------------------
 
-            expected_class,
-
-            expected_close
-
+        expected_seg = expected_segments(
+            expected_class
         )
 
 
-        dut._log.info(
-
-            f"Testing features={features:08b}"
-
-        )
-
-
-        # ========================================================
-        # STEP 1
+        # --------------------------------------------------------------------
+        # uo_out[7] = decimal point / close prediction
         #
-        # WRITE FEATURE REGISTER
-        # ========================================================
+        # uo_out[6:0] = seven segment
+        # --------------------------------------------------------------------
 
-        await bus_write(
+        expected_output = (
+            (int(expected_close) << 7)
+            |
+            expected_seg
+        )
 
-            dut,
 
-            ADDR_FEATURE,
+        # --------------------------------------------------------------------
+        # Compare
+        # --------------------------------------------------------------------
 
-            features
+        assert actual_output == expected_output, (
+
+            f"\nTinyMind SoC mismatch\n"
+
+            f"features          = {features:08b}\n"
+
+            f"expected class    = {expected_class}\n"
+
+            f"expected confidence = {expected_confidence}\n"
+
+            f"expected close    = {expected_close}\n"
+
+            f"expected output   = {expected_output:08b}\n"
+
+            f"actual output     = {actual_output:08b}\n"
 
         )
 
 
-        # ========================================================
-        # STEP 2
-        #
-        # READ FEATURE REGISTER BACK
-        # ========================================================
+        # --------------------------------------------------------------------
+        # Check unused bidirectional outputs again
+        # --------------------------------------------------------------------
 
-        feature_readback = await bus_read(
+        assert int(dut.uio_out.value) == 0
 
-            dut,
+        assert int(dut.uio_oe.value) == 0
 
-            ADDR_FEATURE
 
-        )
-
-
-        assert feature_readback == features, (
-
-            f"Feature register mismatch "
-
-            f"for {features:08b}: "
-
-            f"read={feature_readback:08b}"
-
-        )
-
-
-        # ========================================================
-        # STEP 3
-        #
-        # START TINYMIND
-        # ========================================================
-
-        await bus_write(
-
-            dut,
-
-            ADDR_CONTROL,
-
-            0b00000001
-
-        )
-
-
-        # ========================================================
-        # STEP 4
-        #
-        # RESULT CAPTURE CLOCK
-        #
-        # TinyMind combinational logic evaluates between clocks.
-        #
-        # At this rising edge, result registers capture:
-        #
-        # class
-        # confidence
-        # close flag
-        # ========================================================
-
-        await RisingEdge(dut.clk)
-
-        await FallingEdge(dut.clk)
-
-
-        # ========================================================
-        # STEP 5
-        #
-        # READ STATUS
-        # ========================================================
-
-        status = await bus_read(
-
-            dut,
-
-            ADDR_STATUS
-
-        )
-
-
-        done = (
-
-            status & 1
-
-        )
-
-
-        busy = (
-
-            (status >> 1)
-
-            &
-
-            1
-
-        )
-
-
-        assert busy == 0, (
-
-            f"BUSY failed to clear "
-
-            f"for input {features:08b}"
-
-        )
-
-
-        assert done == 1, (
-
-            f"DONE was not asserted "
-
-            f"for input {features:08b}"
-
-        )
-
-
-        # ========================================================
-        # STEP 6
-        #
-        # READ RESULT REGISTER
-        # ========================================================
-
-        result = await bus_read(
-
-            dut,
-
-            ADDR_RESULT
-
-        )
-
-
-        # --------------------------------------------------------
-        # Decode class
-        # --------------------------------------------------------
-
-        actual_class = (
-
-            result
-
-            &
-
-            0b11
-
-        )
-
-
-        # --------------------------------------------------------
-        # Decode confidence
-        # --------------------------------------------------------
-
-        actual_confidence = (
-
-            (result >> 2)
-
-            &
-
-            0b1111
-
-        )
-
-
-        # --------------------------------------------------------
-        # Decode close flag
-        # --------------------------------------------------------
-
-        actual_close = (
-
-            (result >> 6)
-
-            &
-
-            1
-
-        )
-
-
-        # ========================================================
-        # CHECK MEMORY-MAPPED RESULT
-        # ========================================================
-
-        assert actual_class == expected_class, (
-
-            f"Class mismatch "
-
-            f"for {features:08b}: "
-
-            f"expected={expected_class:02b}, "
-
-            f"actual={actual_class:02b}"
-
-        )
-
-
-        assert actual_confidence == expected_confidence, (
-
-            f"Confidence mismatch "
-
-            f"for {features:08b}: "
-
-            f"expected={expected_confidence}, "
-
-            f"actual={actual_confidence}"
-
-        )
-
-
-        assert actual_close == expected_close, (
-
-            f"Close prediction mismatch "
-
-            f"for {features:08b}: "
-
-            f"expected={expected_close}, "
-
-            f"actual={actual_close}"
-
-        )
-
-
-        # ========================================================
-        # STEP 7
-        #
-        # TEST SEVEN-SEGMENT DISPLAY MODE
-        # ========================================================
-
-        actual_display = await display_read(
-
-            dut
-
-        )
-
-
-        assert actual_display == expected_seg, (
-
-            f"Seven-segment mismatch "
-
-            f"for {features:08b}: "
-
-            f"expected={expected_seg:08b}, "
-
-            f"actual={actual_display:08b}"
-
-        )
-
-
-        # ========================================================
-        # UNUSED BIDIRECTIONAL OUTPUTS
-        # ========================================================
-
-        assert int(
-
-            dut.uio_out.value
-
-        ) == 0
-
-
-        assert int(
-
-            dut.uio_oe.value
-
-        ) == 0
-
-
-        # ========================================================
-        # LOG SUCCESS
-        # ========================================================
-
-        dut._log.info(
-
-            f"features={features:08b} "
-
-            f"class={actual_class:02b} "
-
-            f"confidence={actual_confidence} "
-
-            f"close={actual_close} "
-
-            f"display={actual_display:08b}"
-
-        )
-
-
-    # ============================================================
-    # FINISHED
-    # ============================================================
+    # ========================================================================
+    # SUCCESS
+    # ========================================================================
 
     dut._log.info(
-
-        "All 256 TinyMind cases passed: "
-        "clocked inference + peripheral bus + seven-segment display"
-
+        "TinyMind SoC passed all 256 feature combinations!"
     )
