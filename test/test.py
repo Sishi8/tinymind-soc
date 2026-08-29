@@ -1,6 +1,6 @@
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge, Timer
+from cocotb.triggers import RisingEdge, FallingEdge
 
 
 SEG_A = 0b1110111
@@ -60,6 +60,7 @@ async def test_clocked_tinymind(dut):
 
     dut._log.info("Starting clocked TinyMind test")
 
+    # 100 ns period = 10 MHz
     clock = Clock(dut.clk, 100, unit="ns")
     cocotb.start_soon(clock.start())
 
@@ -67,7 +68,10 @@ async def test_clocked_tinymind(dut):
     dut.ui_in.value = 0
     dut.uio_in.value = 0
 
-    # Reset
+    # ------------------------------------------------------------
+    # RESET
+    # ------------------------------------------------------------
+
     dut.rst_n.value = 0
 
     await RisingEdge(dut.clk)
@@ -75,7 +79,10 @@ async def test_clocked_tinymind(dut):
 
     dut.rst_n.value = 1
 
-    # Test all 256 feature combinations
+    # ------------------------------------------------------------
+    # TEST ALL 256 INPUT COMBINATIONS
+    # ------------------------------------------------------------
+
     for features in range(256):
 
         dut.ui_in.value = features
@@ -84,19 +91,34 @@ async def test_clocked_tinymind(dut):
         expected = expected_output(expected_class, margin)
 
         # --------------------------------------------------------
-        # Pipeline behavior
+        # PIPELINE BEHAVIOR
         #
-        # Edge 1:
-        #   ui_in -> features_reg
+        # Rising Edge 1:
+        #   ui_in is captured into features_reg
         #
-        # Edge 2:
-        #   inference result -> predicted_class register
+        # Between Edge 1 and Edge 2:
+        #   TinyMind calculates:
+        #     - AI score
+        #     - Hardware score
+        #     - Creative score
+        #     - Winner
+        #     - Confidence margin
+        #
+        # Rising Edge 2:
+        #   predicted_class,
+        #   confidence_digit,
+        #   close_prediction
+        #   are captured into the result registers
+        #
+        # We then wait until the FALLING edge before checking
+        # the outputs. This gives the gate-level circuit time
+        # to settle after the result registers change.
         # --------------------------------------------------------
 
         await RisingEdge(dut.clk)
         await RisingEdge(dut.clk)
 
-        await Timer(1, unit="ns")
+        await FallingEdge(dut.clk)
 
         actual = int(dut.uo_out.value)
 
