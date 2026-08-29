@@ -1,7 +1,7 @@
 import cocotb
 
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge, FallingEdge
+from cocotb.triggers import RisingEdge, FallingEdge,Timer
 
 
 # ================================================================
@@ -335,32 +335,19 @@ async def bus_read(
 
 async def display_read(dut):
 
-
-    # ------------------------------------------------------------
     # uio_in[3] = 1
-    #
-    # seven-segment display mode
-    # ------------------------------------------------------------
+    # Select seven-segment display mode
 
-    dut.uio_in.value = (
+    dut.uio_in.value = (1 << 3)
 
-        1 << 3
-
-    )
-
-
-    # ------------------------------------------------------------
-    # Give output mux + decoder time to settle
-    # ------------------------------------------------------------
-
+    # Move safely away from clock edge
     await FallingEdge(dut.clk)
 
+    # Give the gate-level output mux / decoder
+    # additional time to propagate
+    await Timer(20, unit="ns")
 
-    return int(
-
-        dut.uo_out.value
-
-    )
+    return int(dut.uo_out.value)
 
 
 # ================================================================
